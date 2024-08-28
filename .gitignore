@@ -1,0 +1,9 @@
+.venv
+.vscode
+.pytest_cache
+*.cpp
+*.c
+*.so
+__pycache__
+build/
+poetry.lock
