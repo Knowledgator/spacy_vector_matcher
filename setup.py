@@ -6,7 +6,6 @@ import numpy
 from setuptools.command.build_ext import build_ext
 from sysconfig import get_path
 from pathlib import Path
-# import shutil
 from Cython.Build import cythonize
 from Cython.Compiler import Options
 import os
@@ -22,7 +21,6 @@ Options.docstrings = True
 PACKAGES = find_packages()
 MOD_NAMES = [
     "src.knowledgator_spacy_vector_matcher.matcher",
-    "src.knowledgator_spacy_vector_matcher.utils",
 ]
 COMPILE_OPTIONS = {
     "msvc": ["/Ox", "/EHsc"],

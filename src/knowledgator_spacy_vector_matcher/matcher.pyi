@@ -13,5 +13,6 @@ class VectorMatcher(Matcher):
         vocab: Vocab,
         validate: bool = ...,
         fuzzy_compare: Callable[[str, str, int], bool] = ...,
-        similarity_compare: Callable[[NDArray[Any], NDArray[Any]], float] = ... # TODO: check types for ndarray
+        similarity_compare: Callable[[NDArray[Any], NDArray[Any]], float] = ...,
+        include_similarity_scores: bool=False,
     ) -> None: ...

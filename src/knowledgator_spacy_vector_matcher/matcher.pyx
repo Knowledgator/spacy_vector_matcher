@@ -15,8 +15,8 @@ from spacy.matcher.matcher cimport Matcher, TokenPatternC, AttrValueC, IndexValu
 from spacy.typedefs cimport attr_t
 
 from spacy.matcher.matcher import (
-    _get_operators, _get_extensions, _predicate_cache_key, _get_extension_extra_predicates, 
-    _RegexPredicate, _SetPredicate, _ComparisonPredicate, _FuzzyPredicate
+    _get_operators, _get_extensions, _predicate_cache_key, _get_attr_values, _get_extension_extra_predicates,
+    _get_extra_predicates_dict, _RegexPredicate, _SetPredicate, _ComparisonPredicate, _FuzzyPredicate
 )
 from spacy.attrs import IDS
 from spacy.errors import Errors, MatchPatternError, Warnings
@@ -26,7 +26,7 @@ from spacy.matcher.levenshtein import levenshtein_compare
 from .schemas import validate_token_pattern
 from .utils import cosine_similarity
 
-cdef TokenPatternC* init_pattern(Pool mem, attr_t entity_id, object token_specs) except NULL: # from spaCy (here because of how cython works)
+cdef TokenPatternC* init_pattern(Pool mem, attr_t entity_id, object token_specs) except NULL: # here because of how cython imports works
     pattern = <TokenPatternC*>mem.alloc(len(token_specs) + 1, sizeof(TokenPatternC))
     cdef int i, index
     for i, (quantifier, spec, extensions, predicates, token_idx) in enumerate(token_specs):
@@ -71,20 +71,35 @@ cdef class VectorMatcher(Matcher):
     USAGE: https://spacy.io/usage/rule-based-matching
     """
     cdef public object _similarity
+    cdef public object _embedding_model
+    cdef public object _include_similarity_scores
 
-    def __init__(self, vocab, validate=True, *, fuzzy_compare=levenshtein_compare, similarity_compare=cosine_similarity): # TODO: as fuzzy compare add vector distance finder
+    def __init__(
+        self, 
+        vocab, validate=True, 
+        *, 
+        fuzzy_compare=levenshtein_compare, 
+        similarity_compare=cosine_similarity,
+        include_similarity_scores=False,
+    ):
         """Create the Matcher.
 
         vocab (Vocab): The vocabulary object, which must be shared with the
         validate (bool): Validate all patterns added to this matcher.
         fuzzy_compare (Callable[[str, str, int], bool]): The comparison method
             for the FUZZY operators.
+        similarity_compare (Callable[[NDArray[Any], NDArray[Any]], float]): The comparison method
+            for the VECTOR operators.
+        include_similarity_scores (bool): Include similarity scores to Token extensions ('vector_match' key is used).
         """
         super().__init__(vocab=vocab, validate=validate, fuzzy_compare=fuzzy_compare)
         self._similarity = similarity_compare
+        self._include_similarity_scores = include_similarity_scores
+        if self._include_similarity_scores:
+            Token.set_extension("vector_match", default=[], force=True)
 
 
-    def add(self, key, patterns, *, on_match=None, greedy: str = None): # from spaCy
+    def add(self, key, patterns, *, on_match=None, greedy: str = None): # add procesing for vector predicate
         """Add a match-rule to the matcher. A match-rule consists of: an ID
         key, an on_match callback, and one or more patterns.
 
@@ -144,7 +159,8 @@ cdef class VectorMatcher(Matcher):
                     self._extensions,
                     self._extra_predicates,
                     self._fuzzy_compare,
-                    self._similarity # TODO: similarity resolver
+                    self._similarity,
+                    self._include_similarity_scores
                 )
                 self.patterns.push_back(init_pattern(self.mem, key, specs))
                 for spec in specs:
@@ -158,7 +174,7 @@ cdef class VectorMatcher(Matcher):
         self._patterns[key].extend(patterns)
 
 
-def _preprocess_pattern(token_specs, vocab, extensions_table, extra_predicates, fuzzy_compare, similarity):
+def _preprocess_pattern(token_specs, vocab, extensions_table, extra_predicates, fuzzy_compare, similarity, include_similarity_scores): # add similarity for vector predicate
     """This function interprets the pattern, converting the various bits of
     syntactic sugar before we compile it into a struct with init_pattern.
 
@@ -185,81 +201,29 @@ def _preprocess_pattern(token_specs, vocab, extensions_table, extra_predicates, 
         ops = _get_operators(spec)
         attr_values = _get_attr_values(spec, string_store)
         extensions = _get_extensions(spec, string_store, extensions_table)
-        predicates = _get_extra_predicates(spec, extra_predicates, vocab, fuzzy_compare, similarity) # TODO: similarity resolver
+        predicates = _get_extra_predicates(spec, extra_predicates, vocab, fuzzy_compare, similarity, include_similarity_scores) # add similarity for vector predicate
         for op in ops:
             tokens.append((op, list(attr_values), list(extensions), list(predicates), token_idx))
     return tokens
-
-
-def _get_attr_values(spec, string_store): # can be removed
-    attr_values = []
-    for attr, value in spec.items():
-        input_attr = attr
-        if isinstance(attr, str):
-            attr = attr.upper()
-            if attr == '_':
-                continue
-            elif attr == "OP":
-                continue
-            if attr == "TEXT":
-                attr = "ORTH"
-            if attr == "IS_SENT_START":
-                attr = "SENT_START"
-            attr = IDS.get(attr) # TODO: can cause some troubles
-        if isinstance(value, str):
-            if attr == ENT_IOB and value in Token.iob_strings():
-                value = Token.iob_strings().index(value)
-            else:
-                value = string_store.add(value)
-        elif isinstance(value, bool):
-            value = int(value)
-        elif isinstance(value, int):
-            pass
-        elif isinstance(value, dict):
-            continue
-        else:
-            raise ValueError(Errors.E153.format(vtype=type(value).__name__))
-        if attr is not None:
-            attr_values.append((attr, value))
-        else:
-            # should be caught in validation
-            raise ValueError(Errors.E152.format(attr=input_attr))
-    return attr_values
 
 
 class _VectorPredicate: # custom predicate
     operators = ("EMBEDDING", "THRESHOLD")
 
     def __init__(
-        self, i, attr, value, predicate=None, is_extension=False, vocab=None,  # TODO: remove predicate
-        regex=False, fuzzy=None, fuzzy_compare=None, similarity=None
+        self, i, attr, value, vocab=None, similarity=None, include_similarity_scores=False
     ):
         self.i = i
         self.attr = attr
-        self.predicate = predicate
-        self.is_extension = is_extension
-        self.key = _predicate_cache_key(self.attr, self.predicate, value)
+        self.value = {
+            k.upper(): v for k, v in value.items()
+        }
+        self.key = _predicate_cache_key(
+            self.attr, None, {"EMBEDDING": self.value["EMBEDDING"].tolist(), "THRESHOLD": self.value["THRESHOLD"]}
+        )
         self.vocab = vocab
         self.similarity = similarity
-
-        self.value = { # TODO: stupid! Maybe use pydantic
-            "EMBEDDING": None,
-            "THRESHOLD": None
-        }
-
-        # TODO: necessary only for I variant
-        for k, v in value.items(): 
-            k = k.upper()
-            if k not in self.operators:
-                raise ValueError(Errors.E126.format(good=self.operators, bad=k)) # TODO: change error formatting
-            self.value[k] = v 
-        
-        # TODO: add value validation
-        for k, v in self.value.items():
-            if v is None:
-                raise ValueError("Invalid value for: "+k+"; Value: "+str(v))
-            if k == "EMBEDDING":
-                self.value[k] = np.array(v)
+        self.include_similarity_scores = include_similarity_scores
 
 
     def __call__(self, Token token):
@@ -269,15 +233,24 @@ class _VectorPredicate: # custom predicate
         if token.vector_norm == 0:
             if not token.has_vector: # issue with token
                 warnings.warn(Warnings.W008.format(obj="Token"))
-            res = 0.
+            score = 0.
         else:
-            res = self.similarity(token.vector, self.value["EMBEDDING"])
+            if token._.has("embedding"):
+                vector = token._.embedding
+            else: 
+                vector = token.vector
+            try:
+                score = self.similarity(vector, self.value["EMBEDDING"])
+            except Exception as e:
+                raise Exception(f"Matching error: {e}")
+
+        if self.include_similarity_scores:
+            token._.vector_match.append((self.value, score))
         
-        return res >= self.value["THRESHOLD"]
+        return score >= self.value["THRESHOLD"]
 
 
-def _get_extra_predicates(spec, extra_predicates, vocab, fuzzy_compare, similarity): # TODO: check for regex and other stuff 
-                                                                                     # TODO: or wrapp and remove  
+def _get_extra_predicates(spec, extra_predicates, vocab, fuzzy_compare, similarity, include_similarity_scores): # add similarity for vector predicate
     predicate_types = {
         "REGEX": _RegexPredicate,
         "IN": _SetPredicate,
@@ -314,65 +287,22 @@ def _get_extra_predicates(spec, extra_predicates, vocab, fuzzy_compare, similari
                 continue
             elif attr.upper() == "OP":
                 continue
+            elif attr.upper() == "VECTOR": # custom logic for vector
+                predicate = _VectorPredicate(
+                    len(extra_predicates), attr, value, vocab=vocab, 
+                    similarity=similarity, include_similarity_scores=include_similarity_scores
+                )
+                if predicate.key in seen_predicates:
+                    output.append(seen_predicates[predicate.key])
+                else:
+                    extra_predicates.append(predicate)
+                    output.append(predicate.i)
+                    seen_predicates[predicate.key] = predicate.i
+                continue
             if attr.upper() == "TEXT":
                 attr = "ORTH"
-            attr = IDS.get(attr.upper()) # TODO: check for vector
+            attr = IDS.get(attr.upper())
         if isinstance(value, dict):
             output.extend(_get_extra_predicates_dict(attr, value, vocab, predicate_types,
-                                                     extra_predicates, seen_predicates, fuzzy_compare=fuzzy_compare, similarity=similarity))
-    return output
-
-
-def _get_extra_predicates_dict(attr, value_dict, vocab, predicate_types,
-                               extra_predicates, seen_predicates, regex=False, fuzzy=None, fuzzy_compare=None, similarity=None):
-    output = []
-
-    # TODO: custom logic for VECTOR / move out of here? 
-    if attr == IDS.get("VECTOR"): # TODO: refactor
-        cls = _VectorPredicate
-        predicate = cls(len(extra_predicates), attr, value_dict, None, vocab=vocab,
-                        regex=regex, fuzzy=fuzzy, fuzzy_compare=fuzzy_compare, similarity=similarity)
-        if predicate.key in seen_predicates:
-            output.append(seen_predicates[predicate.key])
-        else:
-            extra_predicates.append(predicate)
-            output.append(predicate.i)
-            seen_predicates[predicate.key] = predicate.i
-        return output
-    ##############################
-
-
-    for type_, value in value_dict.items():
-        type_ = type_.upper()
-        cls = predicate_types.get(type_)
-        if cls is None:
-            warnings.warn(Warnings.W035.format(pattern=value_dict))
-            # ignore unrecognized predicate type
-            continue
-        elif cls == _RegexPredicate:
-            if isinstance(value, dict):
-                # add predicates inside regex operator
-                output.extend(_get_extra_predicates_dict(attr, value, vocab, predicate_types,
-                                                         extra_predicates, seen_predicates,
-                                                         regex=True))
-                continue
-        elif cls == _FuzzyPredicate:
-            if isinstance(value, dict):
-                # add predicates inside fuzzy operator
-                fuzz = type_[len("FUZZY"):]  # number after prefix
-                fuzzy_val = int(fuzz) if fuzz else -1
-                output.extend(_get_extra_predicates_dict(attr, value, vocab, predicate_types,
-                                                         extra_predicates, seen_predicates,
-                                                         fuzzy=fuzzy_val, fuzzy_compare=fuzzy_compare))
-                continue
-        predicate = cls(len(extra_predicates), attr, value, type_, vocab=vocab,
-                        regex=regex, fuzzy=fuzzy, fuzzy_compare=fuzzy_compare)
-        # Don't create redundant predicates.
-        # This helps with efficiency, as we're caching the results.
-        if predicate.key in seen_predicates:
-            output.append(seen_predicates[predicate.key])
-        else:
-            extra_predicates.append(predicate)
-            output.append(predicate.i)
-            seen_predicates[predicate.key] = predicate.i
+                                                     extra_predicates, seen_predicates, fuzzy_compare=fuzzy_compare))
     return output

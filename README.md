@@ -22,3 +22,43 @@ matches = matcher(doc, as_spans=True)
 for span in matches:
     logging.info(f'{span.text} -> {span.label_}')
 ```
+
+## Generate vector
+
+Create vector for matching pattern using predefined nlp
+
+``` python
+from knowledgator_spacy_vector_matcher import get_vector_for_matching
+
+vector = get_vector_for_matching(nlp, ["Kyiv", "Madrid", "London"])
+```
+
+## Use embedding layer
+
+Add extra custom layer for other embedding model 
+
+``` python
+import spacy
+from knowledgator_spacy_vector_matcher import VectorMatcher, add_embeddings_layer
+
+nlp = spacy.load("en_core_web_sm")
+add_embeddings_layer(nlp, embedding_model)
+```
+
+or use trained models
+
+## Get scores
+
+Check similarity scores (vector pattern value, score)
+
+``` python
+matcher = VectorMatcher(nlp.vocab, include_similarity_scores=True) # include scores to token extensions
+matcher.add("test", pattern)
+
+doc = nlp(text)
+matches = matcher(doc, as_spans=True)
+for span in matches:
+    logging.info(f'{span.text} -> {span.label_}')
+    for token in span:
+        logging.info(f'{token._.vector_match}') # list of tuples (vector pattern value, score)
+```

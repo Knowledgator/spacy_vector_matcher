@@ -1,36 +1,47 @@
 from typing import (
-    Any,
     List,
     Optional,
 )
 
 try:
     from pydantic.v1 import (
-        BaseModel, Field
+        BaseModel, Field, validator
     )
 except ImportError:
     from pydantic import (  # type: ignore
-        BaseModel, Field
+        BaseModel, Field, validator
     )
 from spacy.attrs import NAMES
 from spacy.schemas import TokenPattern, validate
+import numpy as np
 
-Embedding = List[Any] # TODO: make more type strict
+Embedding = np.ndarray
 
-class TokenPatternVector(BaseModel):
+class Vector(BaseModel):
     embedding: Embedding
     threshold: float = 0
 
-VectorValue = TokenPatternVector 
+    class Config:
+        extra = "forbid"
+        allow_population_by_field_name = True
+        alias_generator = lambda value: value.upper()
+        arbitrary_types_allowed = True
+
+
+    @validator("*", pre=True, allow_reuse=True)
+    def raise_for_none(cls, v):
+        if v is None:
+            raise ValueError("None / null is not allowed")
+        return v
+
+VectorValue = Vector 
 
 class VectorTokenPattern(TokenPattern):
     vector: Optional[VectorValue] = None
 
+
 class VectorTokenPatternSchema(BaseModel):
     pattern: List[VectorTokenPattern] = Field(..., min_items=1)
-
-    class Config:
-        extra = "forbid"
 
 
 def validate_token_pattern(obj: list) -> List[str]: # from spacy
