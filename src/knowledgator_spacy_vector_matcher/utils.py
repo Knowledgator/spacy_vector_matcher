@@ -1,5 +1,6 @@
-from typing import Any, Iterable, Callable
+from typing import Any, List, Callable, Iterable, Union, Tuple
 
+from spacy.tokens import Token
 from spacy.language import Language
 import numpy as np
 from numpy.typing import NDArray
@@ -23,20 +24,34 @@ def cosine_similarity(v1: NDArray[Any], v2: NDArray[Any]): # based on spacy
     return result.item()
 
 
+def get_vector_from_token(t: Token) -> NDArray[Any]:
+    return t._.embedding if t._.has("embedding") else t.vector
+
+
 def get_vector_for_matching(
-    nlp: Language, tokens: Iterable[str], resolver: Callable[[Iterable[NDArray[Any]]], NDArray[Any]]=lambda x: np.add.reduce(x) / len(x)
+    nlp: Language, tokens: Iterable[Union[str, Tuple[str, int], Token]], resolver: Callable[[List[NDArray[Any]]], NDArray[Any]]=lambda x: np.mean(x, axis=0)
 ) -> NDArray[Any]:
     """Generate vector similar to provided tokens vectors using the resolver
 
     nlp (Language): The SpaCy pipeline
-    tokens (Iterable[str]): The text value of target tokens
+    tokens (Iterable[Union[str, Tuple[str, int], Token]]): Possible values:
+        - (str): The text value of target token.
+        - (str, int): The text where token can be found and its index.
+        - (Token): The SpaCy token.
     resolver (Callable[[Iterable[NDArray[Any]]], NDArray[Any]]): This function generates a vector that is similar to the provided token vectors.
     """
     vs = []
     for t in tokens:
-        doc = nlp(t)
-        assert len(doc) == 1, ValueError(f"Expected list of tokens! Get span: '{t}'. Tokens: {list(doc)}")
-        vs.append(doc[0]._.embedding if doc[0]._.has("embedding") else doc[0].vector)
+        if isinstance(t, Token):
+            rt = t
+        elif isinstance(t, tuple):
+            doc = nlp(t[0])
+            rt = doc[t[1]]
+        else:
+            doc = nlp(t)
+            vs.append(resolver([get_vector_from_token(rt) for rt in doc]))
+            continue
+        vs.append(get_vector_from_token(rt))
     return resolver(vs)
 
     
