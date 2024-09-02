@@ -40,7 +40,7 @@ def test_vector_generation_with_context_dependence():
         ]
     )
     pattern = [
-        [{"VECTOR": {"embedding": vector, "threshold": 0.7}, "OP": "?"}],
+        [{"VECTOR": {"embedding": vector, "threshold": 0.65}, "OP": "?"}],
     ]
 
     matcher = VectorMatcher(nlp.vocab, include_similarity_scores=True)
@@ -54,3 +54,36 @@ def test_vector_generation_with_context_dependence():
         logging.info(f'{span.text} -> {span.label_}')
         for token in span:
             logging.info(f'{token._.vector_match}')
+
+
+def test_span_processing():
+    nlp = spacy.load("en_core_web_sm")
+
+    matcher_span = VectorMatcher(nlp.vocab, include_similarity_scores=True)
+    matcher_span.add("span", [
+        [{"OP": "{1}"}, {"LEMMA": "be"}, {"OP": "?"}, {"TEXT": "capital"}]
+    ])
+
+    doc1 = nlp("Warshaw is a capital of Poland. London is a capital of England.")
+    to_process = [
+        doc1[start:end] for _, start, end in matcher_span(doc1)
+    ]
+    doc2 = nlp("Washington is a capital of the United States.")
+    to_process.extend(matcher_span(doc2, as_spans=True))
+
+    vector = get_vector_for_matching(
+        nlp,
+        to_process
+    )
+    pattern = [
+        [{"VECTOR": {"embedding": vector, "threshold": 0.2}, "OP": "?"}],
+    ]
+    
+    matcher_res = VectorMatcher(nlp.vocab, include_similarity_scores=True)
+    matcher_res.add("test", pattern)
+
+    text = "Kyiv is a capital of Ukraine"
+    doc = nlp(text)
+    matches = matcher_res(doc, as_spans=True)
+
+    assert " ".join((span.text for span in matches)) == "Kyiv is a capital"
