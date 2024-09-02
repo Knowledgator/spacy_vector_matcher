@@ -1,6 +1,6 @@
 from typing import Any, List, Callable, Iterable, Union, Tuple
 
-from spacy.tokens import Token
+from spacy.tokens import Token, Span
 from spacy.language import Language
 import numpy as np
 from numpy.typing import NDArray
@@ -29,24 +29,35 @@ def get_vector_from_token(t: Token) -> NDArray[Any]:
 
 
 def get_vector_for_matching(
-    nlp: Language, tokens: Iterable[Union[str, Tuple[str, int], Token]], resolver: Callable[[List[NDArray[Any]]], NDArray[Any]]=lambda x: np.mean(x, axis=0)
+    nlp: Language, tokens: Iterable[Union[str, Tuple[str, int], Tuple[str, int, int], Token, Span]], resolver: Callable[[List[NDArray[Any]]], NDArray[Any]]=lambda x: np.mean(x, axis=0)
 ) -> NDArray[Any]:
     """Generate vector similar to provided tokens vectors using the resolver
 
     nlp (Language): The SpaCy pipeline
     tokens (Iterable[Union[str, Tuple[str, int], Token]]): Possible values:
-        - (str): The text value of target token.
+        - (str): The text value of target token / span.
         - (str, int): The text where token can be found and its index.
+        - (str, int, int): The text where span can be found and its start and end positions.
         - (Token): The SpaCy token.
-    resolver (Callable[[Iterable[NDArray[Any]]], NDArray[Any]]): This function generates a vector that is similar to the provided token vectors.
+        - (Span): The SpaCy span.
+    resolver (Callable[[List[NDArray[Any]]], NDArray[Any]]): This function generates a vector that is similar to the provided token vectors.
     """
     vs = []
     for t in tokens:
         if isinstance(t, Token):
             rt = t
+        elif isinstance(t, Span):
+            vs.append(resolver([get_vector_from_token(rt) for rt in t]))
+            continue
         elif isinstance(t, tuple):
+            if len(t) not in [2, 3]:
+                raise ValueError(f"Unexpected input: {t}")
             doc = nlp(t[0])
-            rt = doc[t[1]]
+            if len(t) == 2:
+                rt = doc[t[1]]
+            elif len(t) == 3:
+                vs.append(resolver([get_vector_from_token(rt) for rt in doc[t[1]:t[2]]]))
+                continue
         else:
             doc = nlp(t)
             vs.append(resolver([get_vector_from_token(rt) for rt in doc]))
