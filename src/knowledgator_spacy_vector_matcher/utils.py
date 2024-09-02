@@ -1,10 +1,15 @@
-from typing import Any, List, Callable, Iterable, Union, Tuple
+from typing import Any, List, Callable, Generator, Iterable, Union, Tuple
+from enum import Enum
 
-from spacy.tokens import Token, Span
+from spacy.tokens import Token, Span, Doc
 from spacy.language import Language
 import numpy as np
 from numpy.typing import NDArray
 from thinc.api import get_array_module
+
+class ProcessingMode(Enum):
+    CHAR = 0
+    TOKEN = 1
 
 
 def vector_norm(vector: NDArray[Any]): # from spacy
@@ -28,8 +33,21 @@ def get_vector_from_token(t: Token) -> NDArray[Any]:
     return t._.embedding if t._.has("embedding") else t.vector
 
 
+def get_vectors_from_span(s: Union[Span, Doc]) -> List[NDArray[Any]]:
+    return [get_vector_from_token(t) for t in s]
+
+
 def get_vector_for_matching(
-    nlp: Language, tokens: Iterable[Union[str, Tuple[str, int], Tuple[str, int, int], Token, Span]], resolver: Callable[[List[NDArray[Any]]], NDArray[Any]]=lambda x: np.mean(x, axis=0)
+    nlp: Language, 
+    tokens: Iterable[Union[
+        str, 
+        Tuple[str, int], 
+        Tuple[str, int, int],
+        Tuple[str, int, int, ProcessingMode], 
+        Token, 
+        Span
+    ]], 
+    resolver: Callable[[List[NDArray[Any]]], NDArray[Any]]=lambda x: np.mean(x, axis=0)
 ) -> NDArray[Any]:
     """Generate vector similar to provided tokens vectors using the resolver
 
@@ -37,7 +55,10 @@ def get_vector_for_matching(
     tokens (Iterable[Union[str, Tuple[str, int], Token]]): Possible values:
         - (str): The text value of target token / span.
         - (str, int): The text where token can be found and its index.
-        - (str, int, int): The text where span can be found and its start and end positions.
+        - (str, int, int): The text where span can be found and its chars start and end positions.
+        - (str, int, int, ProcessingMode): The text where span can be found and its start and end positions:
+            - chars positition with ProcessingMode.CHAR
+            - tokens positition with ProcessingMode.TOKEN
         - (Token): The SpaCy token.
         - (Span): The SpaCy span.
     resolver (Callable[[List[NDArray[Any]]], NDArray[Any]]): This function generates a vector that is similar to the provided token vectors.
@@ -45,24 +66,29 @@ def get_vector_for_matching(
     vs = []
     for t in tokens:
         if isinstance(t, Token):
-            rt = t
+            vs.append(get_vector_from_token(t))
         elif isinstance(t, Span):
-            vs.append(resolver([get_vector_from_token(rt) for rt in t]))
-            continue
+            vs.append(resolver(get_vectors_from_span(t)))
         elif isinstance(t, tuple):
-            if len(t) not in [2, 3]:
-                raise ValueError(f"Unexpected input: {t}")
-            doc = nlp(t[0])
+            TEXT, START, END, MODE = 0, 1, 2, 3
+
+            doc = nlp(t[TEXT])
             if len(t) == 2:
-                rt = doc[t[1]]
+                vs.append(get_vector_from_token(doc[t[START]]))
             elif len(t) == 3:
-                vs.append(resolver([get_vector_from_token(rt) for rt in doc[t[1]:t[2]]]))
-                continue
+                vs.append(resolver(get_vectors_from_span(doc.char_span(t[START], t[END], alignment_mode="expand"))))
+            elif len(t) == 4:
+                if t[MODE] == ProcessingMode.TOKEN:
+                    vs.append(resolver(get_vectors_from_span(doc[t[START]:t[END]])))
+                elif t[MODE] == ProcessingMode.CHAR:
+                    vs.append(resolver(get_vectors_from_span(doc.char_span(t[START], t[END], alignment_mode="expand"))))
+                else:
+                    raise ValueError("Invalid processing mode")
+            else:
+                raise ValueError(f"Unexpected input: {t}")
         else:
             doc = nlp(t)
-            vs.append(resolver([get_vector_from_token(rt) for rt in doc]))
-            continue
-        vs.append(get_vector_from_token(rt))
+            vs.append(resolver(get_vectors_from_span(doc)))
     return resolver(vs)
 
     

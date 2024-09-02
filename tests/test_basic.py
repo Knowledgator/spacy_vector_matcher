@@ -2,7 +2,7 @@ import logging
 
 import numpy as np
 import spacy
-from knowledgator_spacy_vector_matcher import VectorMatcher, get_vector_for_matching
+from knowledgator_spacy_vector_matcher import VectorMatcher, ProcessingMode, get_vector_for_matching
 
 
 
@@ -64,19 +64,32 @@ def test_span_processing():
         [{"OP": "{1}"}, {"LEMMA": "be"}, {"OP": "?"}, {"TEXT": "capital"}]
     ])
 
-    doc1 = nlp("Warshaw is a capital of Poland. London is a capital of England.")
+    
+    text_sample1 = "Warshaw is a capital of Poland."
+    doc1 = nlp(text_sample1)
     to_process = [
-        doc1[start:end] for _, start, end in matcher_span(doc1)
+        (text_sample1, start, end, ProcessingMode.TOKEN) for _, start, end in matcher_span(doc1)
     ]
-    doc2 = nlp("Washington is a capital of the United States.")
-    to_process.extend(matcher_span(doc2, as_spans=True))
+    
+    text_sample2 = "London is a capital of England."
+    doc2 = nlp(text_sample2)
+    to_process.extend((text_sample2, s.start_char, s.end_char) for s in matcher_span(doc2, as_spans=True))
+
+    text_sample3 = "Washington is a capital of the United States."
+    doc3 = nlp(text_sample3)
+    to_process.extend(matcher_span(doc3, as_spans=True))
+
+    text_sample4 = "Paris is a capital of France."
+    doc4 = nlp(text_sample4)
+    to_process.extend((text_sample4, s.start_char, s.end_char, ProcessingMode.CHAR) for s in matcher_span(doc4, as_spans=True))
+
 
     vector = get_vector_for_matching(
         nlp,
         to_process
     )
     pattern = [
-        [{"VECTOR": {"embedding": vector, "threshold": 0.2}, "OP": "?"}],
+        [{"VECTOR": {"embedding": vector, "threshold": 0.25}, "OP": "?"}],
     ]
     
     matcher_res = VectorMatcher(nlp.vocab, include_similarity_scores=True)
