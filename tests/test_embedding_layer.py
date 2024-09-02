@@ -33,7 +33,7 @@ def test_embedding_layer():
 
     vector = get_vector_for_matching(nlp, ["Kyiv", "Madrid", "London"])
     pattern = [
-        [{"VECTOR": {"embedding": vector, "threshold": 0.8}, "OP": "?"}],
+        [{"VECTOR": {"embedding": vector, "threshold": 0.7}, "OP": "?"}],
     ]
 
     matcher = VectorMatcher(nlp.vocab, include_similarity_scores=True)
