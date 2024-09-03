@@ -29,3 +29,4 @@ script = "setup.py"
 [tool.poetry.dependencies]
 python = "^3.12"
 spacy = "^3.7.6"
+flair = "^0.14.0"

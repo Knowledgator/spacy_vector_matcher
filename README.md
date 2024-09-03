@@ -40,10 +40,11 @@ Add extra custom layer for other embedding model
 
 ``` python
 import spacy
+from flair.embeddings import TransformerWordEmbeddings
 from knowledgator_spacy_vector_matcher import VectorMatcher, add_embeddings_layer
 
 nlp = spacy.load("en_core_web_sm")
-add_embeddings_layer(nlp, embedding_model)
+add_embeddings_layer(nlp, TransformerWordEmbeddings(model="BAAI/bge-large-zh-v1.5"))
 ```
 
 or use trained models
